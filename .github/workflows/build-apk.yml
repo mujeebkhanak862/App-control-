@@ -1,0 +1,124 @@
+name: Build APK from ZIP
+
+on:
+  push:
+    paths:
+      - "**/*.zip"
+      - ".github/workflows/build-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Find ZIP file
+        id: zip
+        shell: bash
+        run: |
+          ZIP_FILE=$(find . -type f -name "*.zip" \
+            ! -path "./.git/*" \
+            | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "No ZIP file found."
+            exit 1
+          fi
+
+          echo "ZIP found: $ZIP_FILE"
+          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Extract ZIP
+        shell: bash
+        run: |
+          mkdir -p extracted
+
+          unzip -q "${{ steps.zip.outputs.zip_file }}" \
+            -d extracted
+
+          echo "ZIP extracted successfully."
+
+      - name: Find Android project
+        id: project
+        shell: bash
+        run: |
+          PROJECT_DIR=""
+
+          if [ -f "extracted/settings.gradle" ] || \
+             [ -f "extracted/settings.gradle.kts" ]; then
+            PROJECT_DIR="extracted"
+          else
+            SETTINGS_FILE=$(find extracted -type f \
+              \( -name "settings.gradle" -o -name "settings.gradle.kts" \) \
+              | head -n 1)
+
+            if [ -n "$SETTINGS_FILE" ]; then
+              PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+            fi
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "Could not find an Android/Gradle project."
+            echo "The ZIP must contain settings.gradle or settings.gradle.kts."
+            exit 1
+          fi
+
+          echo "Android project found at: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Make Gradle executable
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        run: |
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+          else
+            echo "gradlew not found."
+            exit 1
+          fi
+
+      - name: Build APK
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          ./gradlew assembleDebug --stacktrace
+
+      - name: Find APK
+        id: apk
+        working-directory: ${{ steps.project.outputs.project_dir }}
+        shell: bash
+        run: |
+          APK=$(find . -type f -name "*.apk" | head -n 1)
+
+          if [ -z "$APK" ]; then
+            echo "APK was not generated."
+            exit 1
+          fi
+
+          echo "APK found: $APK"
+          echo "apk=$APK" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: built-apk
+          path: ${{ steps.project.outputs.project_dir }}/${{ steps.apk.outputs.apk }}
+          if-no-files-found: error
+          retention-days: 30
