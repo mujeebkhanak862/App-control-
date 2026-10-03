@@ -16,34 +16,36 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Unzip project (agar repo mein zip hai)
+      - name: Unzip project if zip exists
         run: |
           zip=$(find . -maxdepth 2 -iname '*.zip' -not -path './.git/*' | head -n1 || true)
           if [ -n "$zip" ]; then echo "Unzipping $zip"; mkdir -p _src && unzip -oq "$zip" -d _src; fi
 
-      - name: Gradle project folder dhoondo
-        id: proj
+      - name: Find Gradle project folder
         run: |
-          f=$(find . -name settings.gradle -not -path './.git/*' -not -path '*/node_modules/*' | head -n1)
-          [ -n "$f" ] || { echo "settings.gradle nahi mili"; exit 1; }
-          echo "dir=$(dirname "$f")" >> "$GITHUB_OUTPUT"
+          f=$(find . -name settings.gradle -not -path './.git/*' | head -n1)
+          [ -n "$f" ] || { echo "settings.gradle not found"; exit 1; }
+          echo "GRADLE_DIR=$(dirname "$f")" >> "$GITHUB_ENV"
 
-      - name: Android SDK licenses + platform
+      - name: Android SDK licenses and platform
         run: |
           export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0"
-          echo "sdk.dir=$ANDROID_HOME" > "${{ steps.proj.outputs.dir }}/local.properties"
+          echo "sdk.dir=$ANDROID_HOME" > "$GRADLE_DIR/local.properties"
 
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.5'
 
       - name: Build debug APK
-        working-directory: ${{ steps.proj.outputs.dir }}
-        run: gradle assembleDebug --stacktrace
+        run: |
+          cd "$GRADLE_DIR"
+          gradle assembleDebug --stacktrace
 
       - uses: actions/upload-artifact@v4
         with:
           name: ControlHub-debug-apk
-          path: ${{ steps.proj.outputs.dir
+          path: |
+            **/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
